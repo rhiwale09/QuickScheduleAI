@@ -1,0 +1,12 @@
+# Node dependencies
+node_modules/
+
+# Environment variables
+.env
+
+# Logs
+*.log
+
+# Build folders (for React)
+build/
+dist/
