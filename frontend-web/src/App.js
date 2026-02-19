@@ -1,116 +1,116 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import axios from "axios";
-import { GoogleOAuthProvider, GoogleLogin } from "@react-oauth/google";
 
 function App() {
-  const [rawText, setRawText] = useState("");
-  const [events, setEvents] = useState([]);
   const [file, setFile] = useState(null);
-  const [token, setToken] = useState("");
+  const [textInput, setTextInput] = useState("");
+  const [events, setEvents] = useState([]);
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  // Parse text into events
-  const parseTextToEvents = (text) => {
-    const lines = text.split("\n").filter(l => l.trim() !== "");
-    const parsed = [];
-
-    for (let line of lines) {
-      // Example: Math Test - Feb 20 2026 10:00 AM to Feb 20 2026 11:00 AM
-      const parts = line.split(" - ");
-      if (!parts[1]) continue;
-
-      const times = parts[1].split(" to ");
-      if (times.length !== 2) continue;
-
-      parsed.push({
-        title: parts[0].trim(),
-        start: new Date(times[0].trim()).toISOString(),
-        end: new Date(times[1].trim()).toISOString()
-      });
-    }
-
-    setEvents(parsed);
-  };
-
-  // Upload file (pdf/image/email)
-  const uploadFile = async () => {
-    if (!file) return alert("Select a file first");
+  const handleUpload = async () => {
+    if (!file) return alert("Choose a file");
 
     const formData = new FormData();
     formData.append("file", file);
 
-    const res = await axios.post("http://localhost:5000/upload", formData, {
-      headers: { "Content-Type": "multipart/form-data" }
-    });
-
-    setRawText(res.data.text);
-    parseTextToEvents(res.data.text);
+    try {
+      setLoading(true);
+      const res = await axios.post("http://localhost:5000/upload", formData);
+      setEvents(res.data.events);
+    } catch (err) {
+      console.error(err);
+    } finally { setLoading(false); }
   };
 
-  // Create Google Calendar events
-  const createCalendarEvents = async () => {
-    if (!token) return alert("Login with Google first");
+  const handleParseText = async () => {
+    if (!textInput) return alert("Paste text");
 
-    await axios.post("http://localhost:5000/create-events", {
-      token,
-      events
-    });
+    try {
+      setLoading(true);
+      const res = await axios.post("http://localhost:5000/parse-text", { text: textInput });
+      setEvents(res.data.events);
+    } catch (err) {
+      console.error(err);
+    } finally { setLoading(false); }
+  };
 
-    alert("Events added to Google Calendar!");
+  const updateEventTime = (idx, field, value) => {
+    const copy = [...events];
+    copy[idx][field] = new Date(value).toISOString();
+    copy[idx].ambiguous = false;
+    setEvents(copy);
+  };
+
+  const handleCreateEvents = async () => {
+    try {
+      setLoading(true);
+      const res = await axios.post("http://localhost:5000/create-events", { events });
+      setMessage(res.data.message);
+      setEvents([]);
+      setTextInput("");
+      setFile(null);
+    } catch (err) {
+      console.error(err);
+    } finally { setLoading(false); }
   };
 
   return (
-    <GoogleOAuthProvider clientId="YOUR_GOOGLE_CLIENT_ID">
-      <div style={{ padding: 20 }}>
-        <h2>⚡ QuickScheduleAI</h2>
+    <div style={{ padding: 20 }}>
+      <h2>QuickScheduleAI</h2>
 
-        <h4>1️⃣ Paste events</h4>
-        <textarea
-          rows="8"
-          cols="70"
-          placeholder="Math Test - Feb 20 2026 10:00 AM to Feb 20 2026 11:00 AM"
-          value={rawText}
-          onChange={(e) => setRawText(e.target.value)}
-        />
+      <h4>Upload file</h4>
+      <input type="file" onChange={e => setFile(e.target.files[0])} />
+      <button onClick={handleUpload} disabled={loading}>Upload</button>
 
-        <br /><br />
-        <button onClick={() => parseTextToEvents(rawText)}>
-          Parse Events
-        </button>
+      <h4>Or paste text</h4>
+      <textarea
+        rows="6"
+        cols="80"
+        value={textInput}
+        onChange={e => setTextInput(e.target.value)}
+      />
+      <br />
+      <button onClick={handleParseText} disabled={loading}>Parse Text</button>
 
-        <hr />
+      {events.length > 0 && (
+        <>
+          <h3>Detected Events</h3>
+          <table border="1" cellPadding="5">
+            <thead>
+              <tr>
+                <th>Title</th>
+                <th>Start</th>
+                <th>End</th>
+                <th>Fix Time?</th>
+              </tr>
+            </thead>
+            <tbody>
+              {events.map((e, i) => (
+                <tr key={i}>
+                  <td>{e.title}</td>
+                  <td>
+                    {e.ambiguous ? (
+                      <input type="datetime-local" onChange={ev => updateEventTime(i, "start", ev.target.value)} />
+                    ) : new Date(e.start).toLocaleString()}
+                  </td>
+                  <td>
+                    {e.ambiguous ? (
+                      <input type="datetime-local" onChange={ev => updateEventTime(i, "end", ev.target.value)} />
+                    ) : new Date(e.end).toLocaleString()}
+                  </td>
+                  <td>{e.ambiguous ? "⚠️ Yes" : "OK"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
 
-        <h4>2️⃣ OR Upload file (PDF / Image / Email)</h4>
-        <input type="file" onChange={(e) => setFile(e.target.files[0])} />
-        <button onClick={uploadFile}>Upload & Extract</button>
+          <button onClick={handleCreateEvents} disabled={loading}>Create Calendar Events</button>
+        </>
+      )}
 
-        <hr />
-
-        <h4>3️⃣ Preview Events</h4>
-        {events.length === 0 && <p>No events parsed yet</p>}
-        <ul>
-          {events.map((e, i) => (
-            <li key={i}>
-              <b>{e.title}</b><br />
-              {new Date(e.start).toLocaleString()} → {new Date(e.end).toLocaleString()}
-            </li>
-          ))}
-        </ul>
-
-        <hr />
-
-        <h4>4️⃣ Login with Google</h4>
-        <GoogleLogin
-          onSuccess={(res) => setToken(res.access_token)}
-          onError={() => alert("Login failed")}
-        />
-
-        <br /><br />
-
-        <button onClick={createCalendarEvents}>
-          🚀 Create Calendar Events
-        </button>
-      </div>
-    </GoogleOAuthProvider>
+      {message && <p>{message}</p>}
+    </div>
   );
 }
 

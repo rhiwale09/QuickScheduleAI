@@ -10,13 +10,17 @@
   "license": "ISC",
   "dependencies": {
     "body-parser": "^2.2.2",
+    "chrono-node": "^2.9.0",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "fs": "^0.0.1-security",
     "googleapis": "^171.4.0",
+    "ics": "^3.8.1",
     "multer": "^2.0.2",
     "nodemailer": "^8.0.1",
-    "pdf-parse": "^1.1.1",
+    "openai": "^6.22.0",
+    "pdf-parse": "^1.1.4",
     "tesseract.js": "^7.0.0"
   },
   "description": ""
