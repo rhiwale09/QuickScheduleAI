@@ -1,5 +1,7 @@
 # Node dependencies
 node_modules/
+# upload folders
+uploads/
 
 # Environment variables
 .env
