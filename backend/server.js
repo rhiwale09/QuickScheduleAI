@@ -11,11 +11,23 @@ const { createEvents } = require("ics");
 
 require("dotenv").config();
 
+// ================== IN-MEMORY CACHE ==================
+// Caches the most recent GPT request/response so you can re-test /create-events
+// without calling GPT again.
 let LAST_EXTRACTED_EVENTS = null;
 let LAST_RAW_TEXT = null;
+
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// ✅ Cache read endpoint (TOP-LEVEL, NOT INSIDE OTHER ROUTES)
+app.get("/api/last-events", (req, res) => {
+  if (!LAST_EXTRACTED_EVENTS) {
+    return res.status(404).json({ error: "No cached events yet" });
+  }
+  res.json({ events: LAST_EXTRACTED_EVENTS, rawText: LAST_RAW_TEXT });
+});
 
 let CLIENT_TIMEZONE = "UTC";
 
@@ -29,9 +41,9 @@ app.post("/api/set-timezone", (req, res) => {
   res.json({ ok: true, timeZone: CLIENT_TIMEZONE });
 });
 
+
 const PORT = process.env.PORT || 5000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
-
 
 // ================= GOOGLE OAUTH SETUP =================
 const oauth2Client = new google.auth.OAuth2(
@@ -97,7 +109,9 @@ app.post("/upload", upload.single("file"), async (req, res) => {
       const xlsx = require("xlsx");
       const workbook = xlsx.readFile(filePath);
       const sheets = workbook.SheetNames;
-      text = sheets.map(name => xlsx.utils.sheet_to_txt(workbook.Sheets[name])).join("\n");
+      text = sheets
+        .map((name) => xlsx.utils.sheet_to_txt(workbook.Sheets[name]))
+        .join("\n");
     }
     // FALLBACK
     else {
@@ -107,6 +121,8 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     fs.unlinkSync(filePath);
 
     const events = await aiExtractEvents(text);
+
+    // ✅ Cache GPT extraction result
     LAST_EXTRACTED_EVENTS = events;
     LAST_RAW_TEXT = text;
 
@@ -128,12 +144,11 @@ app.post("/parse-text", async (req, res) => {
 
   try {
     const events = await aiExtractEvents(text);
-    app.get("/api/last-events", (req, res) => {
-    if (!LAST_EXTRACTED_EVENTS) {
-      return res.status(404).json({ error: "No cached events yet" });
-    }
-      res.json({ events: LAST_EXTRACTED_EVENTS, rawText: LAST_RAW_TEXT });
-    });
+
+    // ✅ Cache GPT extraction result
+    LAST_EXTRACTED_EVENTS = events;
+    LAST_RAW_TEXT = text;
+
     res.json({
       rawText: text,
       events,
@@ -154,13 +169,14 @@ app.post("/create-events", async (req, res) => {
 
   const calendar = google.calendar({ version: "v3", auth: oauth2Client });
   console.log("TZ:", CLIENT_TIMEZONE);
+
   try {
     for (let e of events) {
       await calendar.events.insert({
         calendarId: "primary",
         requestBody: {
           summary: e.title,
-          start: { dateTime: e.start, timeZone: CLIENT_TIMEZONE},
+          start: { dateTime: e.start, timeZone: CLIENT_TIMEZONE },
           end: { dateTime: e.end, timeZone: CLIENT_TIMEZONE },
           location: e.location || "",
           description: e.description || "",
@@ -195,20 +211,8 @@ app.post("/export-ics", (req, res) => {
       title: e.title,
       description: e.description,
       location: e.location,
-      start: [
-        s.getFullYear(),
-        s.getMonth() + 1,
-        s.getDate(),
-        s.getHours(),
-        s.getMinutes(),
-      ],
-      end: [
-        en.getFullYear(),
-        en.getMonth() + 1,
-        en.getDate(),
-        en.getHours(),
-        en.getMinutes(),
-      ],
+      start: [s.getFullYear(), s.getMonth() + 1, s.getDate(), s.getHours(), s.getMinutes()],
+      end: [en.getFullYear(), en.getMonth() + 1, en.getDate(), en.getHours(), en.getMinutes()],
       recurrenceRule: e.recurrence || undefined,
     };
   });
@@ -245,7 +249,6 @@ Rules:
 - Include Zoom/Teams/Meet links in description
 - Do NOT include any explanation or markdown
 
-
 Text:
 ${text}
 `;
@@ -257,24 +260,23 @@ ${text}
     const response = await openai.chat.completions.create({
       model: "gpt-5-mini",
       messages: [{ role: "user", content: prompt }],
-     
     });
 
     const aiText = response.choices[0].message.content.trim();
-    
+
     // Remove markdown code blocks if present
     const cleanedText = aiText.replace(/```json\n?/g, "").replace(/```\n?/g, "");
-    
+
     const parsed = JSON.parse(cleanedText);
 
     return normalizeAIEvents(parsed, text);
   } catch (err) {
     console.warn("⚠️ gpt-5-mini failed:", err.message);
-    
+
     // FALLBACK TO GPT-4O-MINI
     try {
       console.log("🔵 Trying fallback: gpt-4o-mini...");
-      
+
       const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [{ role: "user", content: prompt }],
@@ -304,7 +306,7 @@ function normalizeAIEvents(aiEvents, text) {
     start: e.start || new Date().toISOString(),
     end: e.end || new Date(Date.now() + 3600000).toISOString(),
     location: e.location || "",
-     description: `${e.description || ""}\n\n${extractLinks(text) ? extractLinks(text) + "\n\n" : ""}`.trim()+ text,
+    description: `${e.description || ""}\n\n${extractLinks(text) ? extractLinks(text) + "\n\n" : ""}`.trim() + text,
     ambiguous: false,
     recurrence: detectRecurrence(text),
   }));
@@ -323,8 +325,7 @@ function parseEventsWithChrono(text) {
       endDate = new Date(startDate.getTime() + 60 * 60 * 1000); // default 1 hr
     }
 
-    const ambiguous =
-      !r.start.isCertain("hour") || !r.start.isCertain("minute");
+    const ambiguous = !r.start.isCertain("hour") || !r.start.isCertain("minute");
 
     const title = extractTitle(text, r.text);
     const location = extractLocation(text);
@@ -335,7 +336,7 @@ function parseEventsWithChrono(text) {
       start: startDate?.toISOString(),
       end: endDate?.toISOString(),
       location,
-      description: extractLinks(text)+ text,
+      description: extractLinks(text) + text,
       ambiguous,
       recurrence: detectRecurrence(text),
     });
@@ -357,15 +358,7 @@ function extractTitle(text, chronoText) {
   if (title.length > 5) return title;
 
   // Fallback: find sentence with meeting keywords
-  const keywords = [
-    "meeting",
-    "class",
-    "exam",
-    "interview",
-    "appointment",
-    "call",
-    "session",
-  ];
+  const keywords = ["meeting", "class", "exam", "interview", "appointment", "call", "session"];
   for (let k of keywords) {
     const m = text.match(new RegExp(`(.{0,40}${k}.{0,40})`, "i"));
     if (m) return m[1].trim();
