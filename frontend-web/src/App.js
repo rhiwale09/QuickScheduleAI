@@ -1,7 +1,10 @@
+
 import React, { useState, useEffect } from "react";
 import axios from "axios";
-
+const API = process.env.REACT_APP_API_URL;
 function App() {
+  const [userEmail, setUserEmail] = useState("");
+  const [googleConnected, setGoogleConnected] = useState(false);
   const [file, setFile] = useState(null);
   const [textInput, setTextInput] = useState("");
   const [events, setEvents] = useState([]);
@@ -14,7 +17,7 @@ function App() {
     (async () => {
       try {
         const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        await axios.post("http://localhost:5000/api/set-timezone", { timeZone });
+        await axios.post(`${API}/api/set-timezone`, { timeZone });
         console.log("🌍 Timezone sent:", timeZone);
       } catch (e) {
         console.warn("Timezone send failed:", e?.message || e);
@@ -33,7 +36,7 @@ function App() {
       setLoading(true);
       setMessage("");
 
-      const res = await axios.post("http://localhost:5000/upload", formData, {
+      const res = await axios.post(`${API}/upload`, formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
@@ -64,7 +67,7 @@ function App() {
       setLoading(true);
       setMessage("");
 
-      const res = await axios.post("http://localhost:5000/parse-text", {
+      const res = await axios.post(`${API}/parse-text`, {
         text: textInput,
       });
 
@@ -173,7 +176,26 @@ function App() {
   return (
     <div style={{ padding: 20, fontFamily: "Arial, sans-serif" }}>
       <h2>📅 QuickScheduleAI</h2>
-
+<div style={{ marginBottom: 10 }}>
+  <input
+    type="email"
+    placeholder="Enter your Google email"
+    value={userEmail}
+    onChange={(e) => setUserEmail(e.target.value)}
+    style={{ padding: 5, width: 250, marginRight: 10 }}
+  />
+  <button
+    onClick={() => {
+      if (!userEmail) {
+        alert("Please enter your Google email first");
+        return;
+      }
+      window.location.href = `http://localhost:5000/auth/google?userEmail=${userEmail}`;
+    }}
+  >
+    🔗 Connect Google Calendar
+  </button>
+</div>
       <div style={{ marginBottom: 20 }}>
         <h4>📎 Upload File</h4>
         <input

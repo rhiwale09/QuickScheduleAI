@@ -1,3 +1,14 @@
+require("dotenv").config(); // <-- MUST be first
+const { encrypt, decrypt } = require("./utils/encryption");
+const prisma = require("./db");
+//import { PrismaClient } from "@prisma/client";
+//import config from "../prisma.config"; // or correct relative path
+//const prisma = new PrismaClient(config.datasource);
+const {
+  upsertUserWithGoogle,
+  getUserByEmail,
+  disconnectGoogle,
+} = require("./services/userService");
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
@@ -9,7 +20,7 @@ const { google } = require("googleapis");
 const OpenAI = require("openai");
 const { createEvents } = require("ics");
 
-require("dotenv").config();
+
 
 // ================== IN-MEMORY CACHE ==================
 // Caches the most recent GPT request/response so you can re-test /create-events
@@ -19,7 +30,9 @@ let LAST_RAW_TEXT = null;
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+//app.use(express.json());
 
 // ✅ Cache read endpoint (TOP-LEVEL, NOT INSIDE OTHER ROUTES)
 app.get("/api/last-events", (req, res) => {
@@ -52,9 +65,128 @@ const oauth2Client = new google.auth.OAuth2(
   process.env.REDIRECT_URI
 );
 
-oauth2Client.setCredentials({
-  refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
+
+// ================= GOOGLE AUTH START =================
+app.get("/auth/google", (req, res) => {
+  const { userEmail } = req.query;
+
+  if (!userEmail) {
+    return res.status(400).send("userEmail is required");
+  }
+
+  const authUrl = oauth2Client.generateAuthUrl({
+    access_type: "offline",
+    scope: ["https://www.googleapis.com/auth/calendar"],
+    prompt: "consent",
+    state: userEmail, // ← secure way to pass email
+  });
+
+  res.redirect(authUrl);
 });
+// ================= OAUTH CLIENT FACTORY =================
+async function getOAuthClientForUser(userEmail) {
+  const user = await prisma.user.findUnique({
+    where: { email: userEmail },
+  });
+
+  if (!user || !user.googleRefreshToken) {
+    throw new Error("Google not connected for this user");
+  }
+
+  const oauthClient = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.REDIRECT_URI
+  );
+
+  // Set encrypted refresh token
+  oauthClient.setCredentials({
+    refresh_token: decrypt(user.googleRefreshToken),
+    access_token: user.googleAccessToken || undefined,
+    expiry_date: user.tokenExpiry?.getTime() || undefined,
+  });
+
+  // Auto-save refreshed tokens
+  oauthClient.on("tokens", async (tokens) => {
+    try {
+      const updateData = {};
+
+      if (tokens.access_token) {
+        updateData.googleAccessToken = tokens.access_token;
+      }
+
+      if (tokens.expiry_date) {
+        updateData.tokenExpiry = new Date(tokens.expiry_date);
+      }
+
+      if (tokens.refresh_token) {
+        updateData.googleRefreshToken = encrypt(tokens.refresh_token);
+      }
+
+      await prisma.user.update({
+        where: { email: userEmail },
+        data: updateData,
+      });
+
+      console.log(`🔁 Tokens auto-updated for ${userEmail}`);
+    } catch (err) {
+      console.error("Token auto-save failed:", err);
+    }
+  });
+
+  return oauthClient;
+}
+// ================= GOOGLE OAUTH CALLBACK =================
+app.get("/oauth2callback", async (req, res) => {
+  try {
+    const { code, state } = req.query;
+    const userEmail = state;
+
+    if (!code || !userEmail) {
+      return res.status(400).send("Missing code or userEmail");
+    }
+
+    const { tokens } = await oauth2Client.getToken(code);
+
+    if (!tokens.refresh_token) {
+      return res.status(400).send(
+        "No refresh token returned. Make sure prompt=consent is used."
+      );
+    }
+    
+    await upsertUserWithGoogle(userEmail, tokens);
+    await prisma.user.upsert({
+      where: { email: userEmail },
+      update: {
+        googleRefreshToken: encrypt(tokens.refresh_token),
+        googleAccessToken: tokens.access_token,
+        tokenExpiry: tokens.expiry_date
+          ? new Date(tokens.expiry_date)
+          : null,
+        googleConnected: true,
+      },
+      create: {
+        email: userEmail,
+        googleRefreshToken: encrypt(tokens.refresh_token),
+        googleAccessToken: tokens.access_token,
+        tokenExpiry: tokens.expiry_date
+          ? new Date(tokens.expiry_date)
+          : null,
+        googleConnected: true,
+      },
+    });
+
+    console.log(`✅ Google connected for ${userEmail}`);
+
+    res.send("✅ Google account connected successfully!");
+  } catch (err) {
+    console.error("OAuth error:", err);
+    res.status(500).send("OAuth failed: " + err.message);
+  }
+});
+//oauth2Client.setCredentials({
+ // refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
+//});
 
 // ================= OPENAI SETUP =================
 const openai = new OpenAI({
@@ -162,15 +294,22 @@ app.post("/parse-text", async (req, res) => {
 
 // ================= CREATE GOOGLE CALENDAR EVENTS =================
 app.post("/create-events", async (req, res) => {
-  const { events } = req.body;
+  const { events, userEmail } = req.body;
+
   if (!events || !events.length) {
     return res.status(400).json({ error: "No events provided" });
   }
-
-  const calendar = google.calendar({ version: "v3", auth: oauth2Client });
-  console.log("TZ:", CLIENT_TIMEZONE);
-
+if (!userEmail) {
+  return res.status(400).json({ error: "userEmail required" });
+}
   try {
+    const oauthClient = await getOAuthClientForUser(userEmail);
+
+    const calendar = google.calendar({
+      version: "v3",
+      auth: oauthClient,
+    });
+
     for (let e of events) {
       await calendar.events.insert({
         calendarId: "primary",
@@ -183,9 +322,9 @@ app.post("/create-events", async (req, res) => {
           reminders: {
             useDefault: false,
             overrides: [
-              { method: "popup", minutes: 7 * 24 * 60 }, // 1 week
-              { method: "popup", minutes: 24 * 60 }, // 1 day
-              { method: "popup", minutes: 60 }, // 1 hour
+              { method: "popup", minutes: 7 * 24 * 60 },
+              { method: "popup", minutes: 24 * 60 },
+              { method: "popup", minutes: 60 },
             ],
           },
         },
@@ -194,7 +333,21 @@ app.post("/create-events", async (req, res) => {
 
     res.json({ message: "Events created successfully!" });
   } catch (err) {
-    console.error("CALENDAR ERROR:", err);
+    if (
+  err.response?.data?.error === "invalid_grant" ||
+  err.message?.includes("invalid_grant")
+) {
+      await prisma.user.update({
+        where: { email: userEmail },
+        data: { googleConnected: false },
+      });
+
+      return res.status(401).json({
+        error: "Google authorization expired. Please reconnect.",
+      });
+    }
+
+    console.error("Calendar error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -306,7 +459,7 @@ function normalizeAIEvents(aiEvents, text) {
     start: e.start || new Date().toISOString(),
     end: e.end || new Date(Date.now() + 3600000).toISOString(),
     location: e.location || "",
-    description: `${e.description || ""}\n\n${extractLinks(text) ? extractLinks(text) + "\n\n" : ""}`.trim() + text,
+    description: `${e.description || ""}\n\n${extractLinks(text) ? extractLinks(text) + "\n\n" : ""}`.trim() ,
     ambiguous: false,
     recurrence: detectRecurrence(text),
   }));
@@ -336,7 +489,7 @@ function parseEventsWithChrono(text) {
       start: startDate?.toISOString(),
       end: endDate?.toISOString(),
       location,
-      description: extractLinks(text) + text,
+      description: extractLinks(text) ,
       ambiguous,
       recurrence: detectRecurrence(text),
     });

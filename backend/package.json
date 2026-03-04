@@ -9,6 +9,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@prisma/client": "^5.22.0",
     "axios": "^1.13.5",
     "body-parser": "^2.2.2",
     "chrono-node": "^2.9.0",
@@ -23,6 +24,8 @@
     "nodemailer": "^8.0.1",
     "openai": "^6.22.0",
     "pdf-parse": "^1.1.4",
+    "pg": "^8.19.0",
+    "prisma": "^5.22.0",
     "tesseract.js": "^7.0.0",
     "textract": "^2.5.0",
     "xlsx": "^0.18.5"

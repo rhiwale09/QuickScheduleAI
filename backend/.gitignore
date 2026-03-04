@@ -12,3 +12,5 @@ uploads/
 # Build folders (for React)
 build/
 dist/
+
+/generated/prisma
