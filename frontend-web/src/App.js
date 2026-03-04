@@ -1,7 +1,7 @@
-
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 const API = process.env.REACT_APP_API_URL;
+
 function App() {
   const [userEmail, setUserEmail] = useState("");
   const [googleConnected, setGoogleConnected] = useState(false);
@@ -12,7 +12,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
 
- // Send timezone ONCE at startup
+  // Send timezone ONCE at startup
   useEffect(() => {
     (async () => {
       try {
@@ -24,6 +24,30 @@ function App() {
       }
     })();
   }, []);
+
+  // ================= GOOGLE CONNECT =================
+  const handleGoogleConnect = () => {
+    if (!userEmail) return alert("Please enter your Google email");
+
+    const width = 500;
+    const height = 600;
+    const left = window.screenX + (window.innerWidth - width) / 2;
+    const top = window.screenY + (window.innerHeight - height) / 2;
+
+    const popup = window.open(
+      `${API}/auth/google?userEmail=${encodeURIComponent(userEmail)}`,
+      "Connect Google Calendar",
+      `width=${width},height=${height},left=${left},top=${top}`
+    );
+
+    window.addEventListener("message", function receiveMessage(event) {
+      if (event.data.success) {
+        setGoogleConnected(true);
+        popup.close();
+        window.removeEventListener("message", receiveMessage);
+      }
+    });
+  };
 
   // ================= UPLOAD FILE =================
   const handleUpload = async () => {
@@ -81,9 +105,8 @@ function App() {
       setLoading(false);
     }
   };
-  
 
-  // ================= UPDATE EVENT TIME ================= // IMPORTANT: this converts local to UTC; ok only if your server/calendar uses timezone explicitly.
+  // ================= UPDATE EVENT TIME =================
   const updateEventTime = (id, field, value) => {
     setEvents(
       events.map((e) =>
@@ -116,6 +139,10 @@ function App() {
 
   // ================= CREATE CALENDAR EVENTS =================
   const handleCreateEvents = async () => {
+    if (!googleConnected) {
+      return alert("Please connect Google Calendar first");
+    }
+
     const selectedEvents = events.filter((e) => selectedIds.includes(e.id));
 
     if (selectedEvents.length === 0) {
@@ -124,8 +151,9 @@ function App() {
 
     try {
       setLoading(true);
-      const res = await axios.post("http://localhost:5000/create-events", {
+      const res = await axios.post(`${API}/create-events`, {
         events: selectedEvents,
+        userEmail,
       });
 
       setMessage(res.data.message);
@@ -151,7 +179,7 @@ function App() {
 
     try {
       const res = await axios.post(
-        "http://localhost:5000/export-ics",
+        `${API}/export-ics`,
         { events: selectedEvents },
         { responseType: "blob" }
       );
@@ -176,26 +204,22 @@ function App() {
   return (
     <div style={{ padding: 20, fontFamily: "Arial, sans-serif" }}>
       <h2>📅 QuickScheduleAI</h2>
-<div style={{ marginBottom: 10 }}>
-  <input
-    type="email"
-    placeholder="Enter your Google email"
-    value={userEmail}
-    onChange={(e) => setUserEmail(e.target.value)}
-    style={{ padding: 5, width: 250, marginRight: 10 }}
-  />
-  <button
-    onClick={() => {
-      if (!userEmail) {
-        alert("Please enter your Google email first");
-        return;
-      }
-      window.location.href = `http://localhost:5000/auth/google?userEmail=${userEmail}`;
-    }}
-  >
-    🔗 Connect Google Calendar
-  </button>
-</div>
+      <div style={{ marginBottom: 10 }}>
+        <input
+          type="email"
+          placeholder="Enter your Google email"
+          value={userEmail}
+          onChange={(e) => setUserEmail(e.target.value)}
+          style={{ padding: 5, width: 250, marginRight: 10 }}
+        />
+        <button onClick={handleGoogleConnect}>
+          🔗 Connect Google Calendar
+        </button>
+        {googleConnected && (
+          <span style={{ color: "green", marginLeft: 10 }}>✅ Connected</span>
+        )}
+      </div>
+
       <div style={{ marginBottom: 20 }}>
         <h4>📎 Upload File</h4>
         <input
@@ -254,9 +278,7 @@ function App() {
                   <td>
                     <input
                       value={e.title}
-                      onChange={(ev) =>
-                        updateField(e.id, "title", ev.target.value)
-                      }
+                      onChange={(ev) => updateField(e.id, "title", ev.target.value)}
                       style={{ width: "100%" }}
                     />
                   </td>
@@ -265,9 +287,7 @@ function App() {
                     {e.ambiguous ? (
                       <input
                         type="datetime-local"
-                        onChange={(ev) =>
-                          updateEventTime(e.id, "start", ev.target.value)
-                        }
+                        onChange={(ev) => updateEventTime(e.id, "start", ev.target.value)}
                       />
                     ) : (
                       new Date(e.start).toLocaleString()
@@ -278,9 +298,7 @@ function App() {
                     {e.ambiguous ? (
                       <input
                         type="datetime-local"
-                        onChange={(ev) =>
-                          updateEventTime(e.id, "end", ev.target.value)
-                        }
+                        onChange={(ev) => updateEventTime(e.id, "end", ev.target.value)}
                       />
                     ) : (
                       new Date(e.end).toLocaleString()
@@ -290,9 +308,7 @@ function App() {
                   <td>
                     <input
                       value={e.location || ""}
-                      onChange={(ev) =>
-                        updateField(e.id, "location", ev.target.value)
-                      }
+                      onChange={(ev) => updateField(e.id, "location", ev.target.value)}
                       style={{ width: "100%" }}
                     />
                   </td>
@@ -316,10 +332,7 @@ function App() {
               {loading ? "Creating..." : "📅 Create Calendar Events"}
             </button>
 
-            <button
-              onClick={handleExportICS}
-              style={{ padding: "10px 20px" }}
-            >
+            <button onClick={handleExportICS} style={{ padding: "10px 20px" }}>
               💾 Export .ics File
             </button>
           </div>

@@ -178,7 +178,19 @@ app.get("/oauth2callback", async (req, res) => {
 
     console.log(`✅ Google connected for ${userEmail}`);
 
-    res.send("✅ Google account connected successfully!");
+   // NEW (for popup flow)
+// safer postMessage in /oauth2callback
+const html = `
+  <script>
+    if (window.opener) {
+      window.opener.postMessage({ success: true, userEmail: "${userEmail}" }, "*");
+      window.close();
+    } else {
+      document.write("✅ Google account connected successfully. You can close this tab.");
+    }
+  </script>
+`;
+res.send(html);
   } catch (err) {
     console.error("OAuth error:", err);
     res.status(500).send("OAuth failed: " + err.message);
@@ -189,10 +201,20 @@ app.get("/oauth2callback", async (req, res) => {
 //});
 
 // ================= OPENAI SETUP =================
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
+// ================= OPENAI SETUP =================
+const DISABLE_OPENAI = process.env.DISABLE_OPENAI === "true";
+
+let openai = null;
+
+if (!DISABLE_OPENAI) {
+  openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
+  console.log("🧠 OpenAI ENABLED");
+} else {
+  console.log("🛑 OpenAI DISABLED via environment flag");
+}
 // ================= MULTER SETUP =================
 const upload = multer({ dest: "uploads/" });
 
@@ -380,6 +402,11 @@ app.post("/export-ics", (req, res) => {
 
 // ================= AI EVENT EXTRACTION WITH FALLBACK =================
 async function aiExtractEvents(text) {
+   // 🔥 HARD STOP if disabled
+  if (DISABLE_OPENAI) {
+    console.log("🛑 Skipping OpenAI — using chrono fallback");
+    return parseEventsWithChrono(text);
+  }
   const prompt = `
 Extract all meeting/event details from the following text.
 
