@@ -244,8 +244,26 @@ app.post("/upload", upload.single("file"), async (req, res) => {
       const result = await mammoth.extractRawText({ path: filePath });
       text = result.value;
     }
-    // OLD WORD .DOC
-    else if (originalName.endsWith(".doc")) {
+   
+    // OLD WORD .DOC — use mammoth with fallback to raw text
+else if (originalName.endsWith(".doc")) {
+  try {
+    const mammoth = require("mammoth");
+    const result = await mammoth.extractRawText({ path: filePath });
+    text = result.value;
+  } catch (docErr) {
+    console.warn("mammoth failed on .doc, trying raw read:", docErr.message);
+    try {
+      text = fs.readFileSync(filePath, "utf8");
+    } catch (rawErr) {
+      throw new Error(
+        "Could not read .doc file. Please save it as .docx and try again."
+      );
+    }
+  }
+}
+ // OLD WORD .DOC
+  /*  else if (originalName.endsWith(".doc")) {
       const textract = require("textract");
       text = await new Promise((resolve, reject) => {
         textract.fromFileWithPath(filePath, (err, data) => {
@@ -253,8 +271,8 @@ app.post("/upload", upload.single("file"), async (req, res) => {
           else resolve(data);
         });
       });
-    }
-    // TEXT / EMAIL
+    }*/
+      // TEXT / EMAIL
     else if (mimeType === "text/plain" || originalName.endsWith(".eml")) {
       text = fs.readFileSync(filePath, "utf8");
     }
