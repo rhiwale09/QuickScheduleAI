@@ -714,9 +714,8 @@ def extract_text_from_txt(file_bytes: bytes) -> str:
 
 
 def extract_text_from_doc(file_bytes: bytes) -> str:
-    """Extract text from old .doc files using antiword or fallback."""
+    """Extract text from old .doc files."""
     import subprocess, tempfile, os
-    # Try antiword (available on Linux/Render)
     try:
         with tempfile.NamedTemporaryFile(suffix=".doc", delete=False) as tmp:
             tmp.write(file_bytes)
@@ -730,35 +729,14 @@ def extract_text_from_doc(file_bytes: bytes) -> str:
             return result.stdout
     except Exception as e:
         log.warning(f"antiword failed: {e}")
-
-    # Try catdoc
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".doc", delete=False) as tmp:
-            tmp.write(file_bytes)
-            tmp_path = tmp.name
-        result = subprocess.run(
-            ["catdoc", tmp_path],
-            capture_output=True, text=True, timeout=10
-        )
-        os.unlink(tmp_path)
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout
-    except Exception as e:
-        log.warning(f"catdoc failed: {e}")
-
-    # Last resort: treat as raw bytes and extract readable text
     try:
         text = file_bytes.decode("latin-1", errors="ignore")
-        # Keep only printable ASCII lines
         lines = []
-        for line in text.split("
-"):
-            clean = "".join(c for c in line if 32 <= ord(c) < 127 or c in "	
-")
+        for line in text.split("\n"):
+            clean = "".join(c for c in line if 32 <= ord(c) < 127 or c == "\t")
             if len(clean.strip()) > 5:
                 lines.append(clean.strip())
-        return "
-".join(lines)
+        return "\n".join(lines)
     except Exception:
         return ""
 
