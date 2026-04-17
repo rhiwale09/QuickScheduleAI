@@ -1,4 +1,5 @@
 require("dotenv").config(); // <-- MUST be first
+const { extractEvents } = require("./eventExtractor");
 const { encrypt, decrypt } = require("./utils/encryption");
 const prisma = require("./db");
 //import { PrismaClient } from "@prisma/client";
@@ -407,138 +408,20 @@ app.post("/export-ics", (req, res) => {
   });
 });
 // ================= CUSTOM EVENT EXTRACTOR (no AI needed) =================
-
 async function customExtractEvents(text) {
-  const events = [];
-  let idCounter = 1;
-  const seenTitles = new Set();
-
-  // ── Split into blocks by double newline ──
-  const blocks = text
-    .split(/\n{2,}/)
-    .map(b => b.trim())
-    .filter(b => b.length > 15 && b.length < 2000);
-
-  const YEAR_RE = /\b(202[4-9]|203\d)\b/;
-
-  const EVENT_KEYWORDS = /\b(tea|dance|dinner|party|prom|graduation|chapel|sunrise|sunset|celebration|portrait|brunch|meal|breakfast|lunch|meeting|skit|reception|ceremony|baccalaureate|homecoming|social)\b/i;
-
-  const SKIP_PATTERNS = /\b(submit|email|website|jostens|quadrangle|smugmug|jpeg|format|handbook|criteria|purchase|download|upload|fee|photos?\s+must|please\s+include|pictures?\s+from|emphasis|sorted\s+by)\b/i;
-
-  // ── Extract a clean short title from first ALL-CAPS or heading line ──
-  const extractTitle = (block) => {
-    const lines = block.split("\n").map(l => l.trim()).filter(Boolean);
-    for (const line of lines) {
-      const clean = line
-        .replace(/\s*[-–—]\s*(student only event|parent only|continued.*)/gi, "")
-        .replace(/[–—]/g, "")
-        .trim();
-      if (clean.length < 8 || clean.length > 80) continue;
-      if (clean === clean.toUpperCase() && /[A-Z]/.test(clean)) return clean;
-    }
-    // First short line
-    for (const line of lines) {
-      if (line.length > 8 && line.length < 70) return line;
-    }
-    return lines[0]?.slice(0, 60) || "Event";
-  };
-
-  // ── Extract date only from THIS block, not the whole document ──
-  const extractDateFromBlock = (block) => {
-    // Try exact date first e.g. "May 19, 2027" or "May 15th from 12:00-1:00PM"
-    const exactMatch = block.match(
-      /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(202\d)/i
-    );
-    if (exactMatch) {
-      const d = new Date(`${exactMatch[1]} ${exactMatch[2]}, ${exactMatch[3]}`);
-      if (!isNaN(d)) {
-        // Try to find time in same block
-        const timeMatch = block.match(/(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})\s*(am|pm)?/i) ||
-                          block.match(/(\d{1,2})\s*(am|pm)\s*[-–]\s*(\d{1,2})\s*(am|pm)/i);
-        if (timeMatch) {
-          return { start: d, end: new Date(d.getTime() + 3600000), ambiguous: false };
-        }
-        return { start: d, end: new Date(d.getTime() + 3600000), ambiguous: true };
-      }
-    }
-
-    // Chrono on THIS block only (not full text)
-    const results = chrono.parse(block, new Date(), { forwardDate: true });
+  try {
+    const results = extractEvents(text, { maxEvents: 50 });
     if (results.length > 0) {
-      const r = results[0];
-      const start = r.start.date();
-      const end = r.end ? r.end.date() : new Date(start.getTime() + 3600000);
-      const ambiguous = !r.start.isCertain("hour") || !r.start.isCertain("minute");
-      return { start, end, ambiguous };
+      console.log(`✅ Local extractor found ${results.length} events`);
+      return results;
     }
-
-    // Seasonal fallback — only use year if found in THIS block
-    const lower = block.toLowerCase();
-    const yearMatch = block.match(YEAR_RE);
-    const year = yearMatch ? yearMatch[1] : null;
-
-    // Only assign seasonal date if year is present OR clear seasonal keyword
-    if (!year && !/\b(summer|fall|spring|winter|august|september|october|november|december|january|february|march|april|may|june|july)\b/i.test(block)) {
-      return null;
-    }
-
-    const useYear = year || (new Date().getFullYear() + 1).toString();
-
-    if (/\baugust\b/.test(lower))                    return { start: new Date(`August 1, ${useYear}`),    end: new Date(`August 1, ${useYear} 01:00`),    ambiguous: true };
-    if (/\bearly fall\b|\bseptember\b/.test(lower))  return { start: new Date(`September 1, ${useYear}`), end: new Date(`September 1, ${useYear} 01:00`), ambiguous: true };
-    if (/\boctober\b|\bfall\b/.test(lower))          return { start: new Date(`October 1, ${useYear}`),   end: new Date(`October 1, ${useYear} 01:00`),   ambiguous: true };
-    if (/\bnovember\b/.test(lower))                  return { start: new Date(`November 1, ${useYear}`),  end: new Date(`November 1, ${useYear} 01:00`),  ambiguous: true };
-    if (/\bdecember\b/.test(lower))                  return { start: new Date(`December 1, ${useYear}`),  end: new Date(`December 1, ${useYear} 01:00`),  ambiguous: true };
-    if (/\bjanuary\b/.test(lower))                   return { start: new Date(`January 1, ${useYear}`),   end: new Date(`January 1, ${useYear} 01:00`),   ambiguous: true };
-    if (/\bfebruary\b/.test(lower))                  return { start: new Date(`February 1, ${useYear}`),  end: new Date(`February 1, ${useYear} 01:00`),  ambiguous: true };
-    if (/\bspring\b|\bmarch\b/.test(lower))          return { start: new Date(`March 1, ${useYear}`),     end: new Date(`March 1, ${useYear} 01:00`),     ambiguous: true };
-    if (/\bapril\b/.test(lower))                     return { start: new Date(`April 1, ${useYear}`),     end: new Date(`April 1, ${useYear} 01:00`),     ambiguous: true };
-    if (/\bmay\b/.test(lower))                       return { start: new Date(`May 1, ${useYear}`),       end: new Date(`May 1, ${useYear} 01:00`),       ambiguous: true };
-    if (/\bsummer\b|\bjune\b|\bjuly\b/.test(lower)) return { start: new Date(`June 1, ${useYear}`),      end: new Date(`June 1, ${useYear} 01:00`),      ambiguous: true };
-
-    return null;
-  };
-
-  // ── Process each block ──
-  for (const block of blocks) {
-    // Skip blocks that are clearly instructions/bullets not events
-    if (SKIP_PATTERNS.test(block)) continue;
-    if (!EVENT_KEYWORDS.test(block)) continue;
-
-    const dateInfo = extractDateFromBlock(block);
-    if (!dateInfo) continue;
-
-    const title = extractTitle(block);
-
-    // Skip duplicates by title
-    const titleKey = title.toLowerCase().replace(/\s+/g, " ").trim();
-    if (seenTitles.has(titleKey)) continue;
-    seenTitles.add(titleKey);
-
-    // Short clean description — first 2 sentences only
-    const sentences = block
-      .replace(/\n+/g, " ")
-      .split(/(?<=[.!?])\s+/)
-      .filter(s => s.length > 10 && !SKIP_PATTERNS.test(s));
-    const desc = sentences.slice(0, 2).join(" ").slice(0, 250);
-
-    const location = extractLocation(block);
-    const recurrence = detectRecurrence(block);
-
-    events.push({
-      id: idCounter++,
-      title,
-      start: dateInfo.start.toISOString(),
-      end: dateInfo.end.toISOString(),
-      location,
-      description: desc,
-      ambiguous: dateInfo.ambiguous,
-      recurrence,
-    });
+    console.warn("⚠ Local extractor found 0 events — falling back to chrono");
+  } catch (err) {
+    console.warn("⚠ Local extractor failed:", err.message);
   }
-
-  return events;
+  return parseEventsWithChrono(text);
 }
+
 // ================= AI EVENT EXTRACTION WITH FALLBACK =================
 async function aiExtractEvents(text) {
    // 🔥 HARD STOP if disabled
