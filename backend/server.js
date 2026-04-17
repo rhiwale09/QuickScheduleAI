@@ -406,14 +406,109 @@ app.post("/export-ics", (req, res) => {
     res.send(value);
   });
 });
+// ================= CUSTOM EVENT EXTRACTOR (no AI needed) =================
+async function customExtractEvents(text) {
+  const events = [];
+  let idCounter = 1;
 
+  const MONTHS = /\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/i;
+  const MONTH_ABBR = /\b(jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b/i;
+  const TIME_RE = /\b(\d{1,2}:\d{2}\s*(am|pm)?|\d{1,2}\s*(am|pm))\b/i;
+  const YEAR_RE = /\b(202[4-9]|203\d)\b/;
+
+  const extractBlockTitle = (block) => {
+    const lines = block.split("\n").map(l => l.trim()).filter(Boolean);
+    for (const line of lines) {
+      const clean = line.replace(/[–—\-·•]/g, "").trim();
+      if (clean.length < 5) continue;
+      if (clean === clean.toUpperCase() && clean.length < 100) return clean;
+      if (clean.length < 60) return clean;
+    }
+    return lines[0]?.slice(0, 80) || "Event";
+  };
+
+  const extractDate = (block) => {
+    const results = chrono.parse(block, new Date(), { forwardDate: true });
+    if (results.length > 0) {
+      const r = results[0];
+      const start = r.start.date();
+      const end = r.end ? r.end.date() : new Date(start.getTime() + 3600000);
+      const ambiguous = !r.start.isCertain("hour") || !r.start.isCertain("minute");
+      return { start, end, ambiguous };
+    }
+    const monthMatch = block.match(
+      /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(202\d)/i
+    );
+    if (monthMatch) {
+      const d = new Date(`${monthMatch[1]} ${monthMatch[2]}, ${monthMatch[3]}`);
+      if (!isNaN(d)) return { start: d, end: new Date(d.getTime() + 3600000), ambiguous: true };
+    }
+    const lower = block.toLowerCase();
+    const year = (block.match(YEAR_RE) || [])[1] || new Date().getFullYear() + 1;
+    if (/\bearly fall\b|\bseptember\b/.test(lower)) return { start: new Date(`September 1, ${year}`), end: new Date(`September 1, ${year} 01:00`), ambiguous: true };
+    if (/\boctober\b|\bfall\b/.test(lower))         return { start: new Date(`October 1, ${year}`),   end: new Date(`October 1, ${year} 01:00`),   ambiguous: true };
+    if (/\bnovember\b/.test(lower))                  return { start: new Date(`November 1, ${year}`),  end: new Date(`November 1, ${year} 01:00`),  ambiguous: true };
+    if (/\bdecember\b/.test(lower))                  return { start: new Date(`December 1, ${year}`),  end: new Date(`December 1, ${year} 01:00`),  ambiguous: true };
+    if (/\bspring\b|\bmarch\b/.test(lower))          return { start: new Date(`March 1, ${year}`),     end: new Date(`March 1, ${year} 01:00`),     ambiguous: true };
+    if (/\bapril\b/.test(lower))                     return { start: new Date(`April 1, ${year}`),     end: new Date(`April 1, ${year} 01:00`),     ambiguous: true };
+    if (/\bmay\b/.test(lower))                       return { start: new Date(`May 1, ${year}`),       end: new Date(`May 1, ${year} 01:00`),       ambiguous: true };
+    if (/\bsummer\b|\bjune\b|\bjuly\b/.test(lower)) return { start: new Date(`June 1, ${year}`),      end: new Date(`June 1, ${year} 01:00`),      ambiguous: true };
+    if (/\baugust\b/.test(lower))                    return { start: new Date(`August 1, ${year}`),    end: new Date(`August 1, ${year} 01:00`),    ambiguous: true };
+    if (/\bjanuary\b/.test(lower))                   return { start: new Date(`January 1, ${year}`),   end: new Date(`January 1, ${year} 01:00`),   ambiguous: true };
+    if (/\bfebruary\b/.test(lower))                  return { start: new Date(`February 1, ${year}`),  end: new Date(`February 1, ${year} 01:00`),  ambiguous: true };
+    return null;
+  };
+
+  const isEventBlock = (block) => {
+    const hasDate = MONTHS.test(block) || MONTH_ABBR.test(block) || TIME_RE.test(block) || YEAR_RE.test(block);
+    const hasEventKeyword = /\b(event|dance|dinner|party|tea|ceremony|reception|skit|prom|graduation|chapel|sunrise|sunset|celebration|portrait|photo|brunch|meal|breakfast|lunch|meeting|class|game|practice|social|parade)\b/i.test(block);
+    const isBulletList = (block.match(/^[·•●\-]/gm) || []).length > 3;
+    const isHeadingOnly = block.split("\n").length === 1 && block.length < 40;
+    return (hasDate || hasEventKeyword) && !isBulletList && !isHeadingOnly;
+  };
+
+  const blocks = text.split(/\n{2,}/).map(b => b.trim()).filter(b => b.length > 10);
+
+  for (const block of blocks) {
+    if (!isEventBlock(block)) continue;
+    const dateInfo = extractDate(block);
+    if (!dateInfo) continue;
+    const title = extractBlockTitle(block);
+    const location = extractLocation(block);
+    const links = extractLinks(block);
+    const recurrence = detectRecurrence(block);
+    const lines = block.split("\n").map(l => l.trim()).filter(Boolean);
+    const desc = lines.slice(1).join(" ").slice(0, 300);
+    events.push({
+      id: idCounter++,
+      title,
+      start: dateInfo.start.toISOString(),
+      end: dateInfo.end.toISOString(),
+      location,
+      description: links !== block ? links : desc,
+      ambiguous: dateInfo.ambiguous,
+      recurrence,
+    });
+  }
+  return events;
+}
 // ================= AI EVENT EXTRACTION WITH FALLBACK =================
 async function aiExtractEvents(text) {
    // 🔥 HARD STOP if disabled
-  if (DISABLE_OPENAI) {
-    console.log("🛑 Skipping OpenAI — using chrono fallback");
-    return parseEventsWithChrono(text);
+ if (DISABLE_OPENAI) {
+  console.log("🔵 DISABLE_OPENAI=true — using custom extractor");
+  try {
+    const results = await customExtractEvents(text);
+    if (results.length > 0) {
+      console.log(`✅ Custom extractor found ${results.length} events`);
+      return results;
+    }
+    console.warn("⚠ Custom extractor found 0 — falling back to chrono");
+  } catch (err) {
+    console.warn("⚠ Custom extractor failed:", err.message);
   }
+  return parseEventsWithChrono(text);
+}
   const prompt = `
 Extract all meeting/event details from the following text.
 
@@ -480,8 +575,17 @@ ${text}
     }
   }
 
+ // FALLBACK TO CUSTOM EXTRACTOR
+  console.warn("🧠 Trying custom extractor as fallback...");
+  try {
+    const results = await customExtractEvents(text);
+    if (results.length > 0) return results;
+  } catch (err) {
+    console.warn("⚠ Custom extractor failed:", err.message);
+  }
+
   // FINAL FALLBACK TO CHRONO-NODE
-  console.warn("🧠 Using chrono-node fallback...");
+  console.warn("🧠 Final fallback: chrono-node");
   return parseEventsWithChrono(text);
 }
 
