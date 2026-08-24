@@ -589,9 +589,9 @@ function extractLinks(text) {
 function detectRecurrence(text) {
   text = text.toLowerCase();
 
-  if (/every day|daily/.test(text)) return "RRULE:FREQ=DAILY";
-  if (/every week|weekly/.test(text)) return "RRULE:FREQ=WEEKLY";
-  if (/every month|monthly/.test(text)) return "RRULE:FREQ=MONTHLY";
+  if (/every day|daily/.test(text)) return "FREQ=DAILY";
+  if (/every week|weekly/.test(text)) return "FREQ=WEEKLY";
+  if (/every month|monthly/.test(text)) return "FREQ=MONTHLY";
 
   // Mon/Wed/Fri pattern
   const days = [];
@@ -604,7 +604,7 @@ function detectRecurrence(text) {
   if (/sunday|sun\b/.test(text)) days.push("SU");
 
   if (days.length > 1) {
-    return `RRULE:FREQ=WEEKLY;BYDAY=${days.join(",")}`;
+    return `FREQ=WEEKLY;BYDAY=${days.join(",")}`;
   }
 
   return null;
