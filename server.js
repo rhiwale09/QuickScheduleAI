@@ -396,24 +396,66 @@ if (!userEmail) {
 app.post("/export-ics", (req, res) => {
   const { events } = req.body;
 
-  const icsEvents = events.map((e) => {
-    const s = new Date(e.start);
-    const en = new Date(e.end);
+  if (!Array.isArray(events) || events.length === 0) {
+    return res.status(400).json({ error: "No events provided to export." });
+  }
 
-    return {
-      title: e.title,
-      description: e.description,
-      location: e.location,
-      start: [s.getFullYear(), s.getMonth() + 1, s.getDate(), s.getHours(), s.getMinutes()],
-      end: [en.getFullYear(), en.getMonth() + 1, en.getDate(), en.getHours(), en.getMinutes()],
-      recurrenceRule: e.recurrence || undefined,
-    };
+  // ics wants a "RRULE:"-less recurrence string; strip it if the caller included one
+  const cleanRecurrence = (r) => {
+    if (!r || typeof r !== "string") return undefined;
+    const rule = r.trim().replace(/^RRULE:/i, "").trim();
+    return rule || undefined;
+  };
+
+  const parts = (d) => [
+    d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes(),
+  ];
+
+  const icsEvents = [];
+  const skipped = [];
+
+  events.forEach((e, i) => {
+    const startDate = e.start ? new Date(e.start) : null;
+    if (!startDate || isNaN(startDate.getTime())) {
+      skipped.push(e.title || `Event ${i + 1}`);
+      return;
+    }
+
+    let endDate = e.end ? new Date(e.end) : null;
+    if (!endDate || isNaN(endDate.getTime()) || endDate <= startDate) {
+      endDate = new Date(startDate.getTime() + 60 * 60 * 1000); // default 1 hr
+    }
+
+    icsEvents.push({
+      title: e.title || "Untitled event",
+      description: e.description || undefined,
+      location: e.location || undefined,
+      start: parts(startDate),
+      end: parts(endDate),
+      recurrenceRule: cleanRecurrence(e.recurrence),
+    });
   });
 
+  if (icsEvents.length === 0) {
+    return res.status(422).json({
+      error: "None of the selected events had a valid date/time to export.",
+      skipped,
+    });
+  }
+
   createEvents(icsEvents, (err, value) => {
-    if (err) return res.status(500).send(err);
+    if (err) {
+      console.error("export-ics createEvents error:", err);
+      return res.status(500).json({
+        error: "Failed to build the .ics file.",
+        detail: String((err && err.message) || err),
+        skipped,
+      });
+    }
     res.setHeader("Content-Type", "text/calendar");
     res.setHeader("Content-Disposition", "attachment; filename=events.ics");
+    res.setHeader("Access-Control-Expose-Headers", "X-Skipped-Events");
+    res.setHeader("X-Skipped-Events", String(skipped.length));
     res.send(value);
   });
 });
@@ -506,7 +548,7 @@ function normalizeAIEvents(aiEvents, text) {
     location: e.location || "",
     description: `${e.description || ""}\n\n${extractLinks(text) ? extractLinks(text) + "\n\n" : ""}`.trim() ,
     ambiguous: false,
-    recurrence: detectRecurrence(text),
+    recurrence: detectRecurrence(`${e.title || ""} ${e.description || ""}`),
   }));
 }
 
@@ -528,6 +570,10 @@ function parseEventsWithChrono(text) {
     const title = extractTitle(text, r.text);
     const location = extractLocation(text);
 
+    const lineStart = text.lastIndexOf("\n", r.index) + 1;
+    const lineEndIdx = text.indexOf("\n", r.index);
+    const eventContext = text.slice(lineStart, lineEndIdx === -1 ? text.length : lineEndIdx);
+
     events.push({
       id: idx + 1,
       title: title || `Event ${idx + 1}`,
@@ -536,7 +582,7 @@ function parseEventsWithChrono(text) {
       location,
       description: extractLinks(text) ,
       ambiguous,
-      recurrence: detectRecurrence(text),
+      recurrence: detectRecurrence(eventContext),
     });
   });
 
@@ -582,7 +628,7 @@ function extractLinks(text) {
   if (teamsMatch) links.push(`Teams: ${teamsMatch[1]}`);
   if (meetMatch) links.push(`Meet: ${meetMatch[1]}`);
 
-  return links.length > 0 ? links.join("\n") : text;
+  return links.length > 0 ? links.join("\n") : "";
 }
 
 // ================= DETECT RECURRENCE =================

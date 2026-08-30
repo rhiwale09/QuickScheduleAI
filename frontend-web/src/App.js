@@ -396,9 +396,24 @@ function App() {
       link.href = url; link.setAttribute("download", "events.ics");
       document.body.appendChild(link); link.click(); link.remove();
       setShowIcsGuide(true);
-      setMessage("events.ics downloaded! See the import guide below.");
+
+      const skippedHeader = res.headers["x-skipped-events"];
+      const skipped = skippedHeader ? Number(skippedHeader) : 0;
+      setMessage(
+        skipped > 0
+          ? `events.ics downloaded — but ${skipped} event${skipped === 1 ? "" : "s"} without a valid date/time ${skipped === 1 ? "was" : "were"} left out. See the import guide below.`
+          : "events.ics downloaded! See the import guide below."
+      );
     } catch (err) {
-      alert("Failed to export .ics file.");
+      // error responses come back as a Blob because of responseType: "blob"
+      let msg = "Failed to export .ics file.";
+      try {
+        const body = err.response?.data;
+        const text = body instanceof Blob ? await body.text() : typeof body === "string" ? body : "";
+        const parsed = text ? JSON.parse(text) : null;
+        if (parsed?.error) msg = parsed.error;
+      } catch (_) { /* keep default message */ }
+      alert(msg);
     }
   };
 
